@@ -1,0 +1,278 @@
+================================================================================
+   AI INVESTMENT RESEARCH AGENT — PROJECT SUMMARY
+   Built with: Next.js 16, LangGraph.js, Google Gemini, Tavily Search
+================================================================================
+
+--------------------------------------------------------------------------------
+OVERVIEW
+--------------------------------------------------------------------------------
+An AI-powered investment research tool that takes a company name as input,
+researches the founding team using web search, scores them on a custom rubric,
+and returns a structured verdict: Invest / Pass with note / Pass / Inconclusive.
+
+The agent evaluates companies through the lens of FOUNDER & EXECUTION QUALITY,
+not just market size — because early-stage outcomes are driven more by WHO is
+building than WHAT is being built.
+
+--------------------------------------------------------------------------------
+PROJECT LOCATION
+--------------------------------------------------------------------------------
+/home/vishal/Desktop/Agent/
+
+--------------------------------------------------------------------------------
+TECH STACK
+--------------------------------------------------------------------------------
+  - Framework  : Next.js 16 (App Router, TypeScript, src/ layout)
+  - Agent      : LangGraph.js (StateGraph with iterative retry loop)
+  - LLM        : Google Gemini 1.5 Flash via @langchain/google-genai
+  - Search     : Tavily API (free tier — no paid APIs used)
+  - Schema     : Zod (structured extraction + type safety)
+  - Deployment : Vercel (target)
+
+--------------------------------------------------------------------------------
+FILE STRUCTURE
+--------------------------------------------------------------------------------
+/home/vishal/Desktop/Agent/
+├── src/
+│   ├── lib/
+│   │   └── agent/
+│   │       ├── schema.ts        ← Zod schemas + LangGraph AgentState
+│   │       ├── nodes.ts         ← All 5 LangGraph node functions
+│   │       └── graph.ts         ← Graph wiring + conditional routing
+│   └── app/
+│       ├── layout.tsx           ← Root layout (auto-generated)
+│       ├── page.tsx             ← Home page (auto-generated placeholder)
+│       ├── globals.css          ← Global styles
+│       └── api/
+│           └── research/
+│               └── route.ts     ← POST /api/research endpoint
+├── .env.local                   ← API keys (YOU MUST FILL THIS IN)
+├── package.json                 ← All dependencies declared
+└── PROJECT_SUMMARY.txt          ← This file
+
+--------------------------------------------------------------------------------
+ENVIRONMENT VARIABLES (.env.local)
+--------------------------------------------------------------------------------
+TAVILY_API_KEY=tvly-xxxxxxxxxxxxxxxx    ← Get free key at: https://tavily.com
+GEMINI_API_KEY=AIzaxxxxxxxxxxxxxxxx     ← Get key at: https://aistudio.google.com
+
+--------------------------------------------------------------------------------
+DEPENDENCIES (package.json)
+--------------------------------------------------------------------------------
+Production:
+  @langchain/core         — LangChain base primitives
+  @langchain/google-genai — Gemini LLM integration
+  @langchain/langgraph    — Agent orchestration (StateGraph)
+  @tavily/core            — Free web search API client
+  lucide-react            — Icons for frontend
+  next                    — Next.js 16.2.10
+  react / react-dom       — React 19
+  zod                     — Schema validation + structured outputs
+
+Dev:
+  @tailwindcss/postcss, tailwindcss — Styling
+  typescript, @types/*              — Type safety
+  eslint, eslint-config-next        — Linting
+
+--------------------------------------------------------------------------------
+AGENT ARCHITECTURE — LangGraph StateGraph (ITERATIVE)
+--------------------------------------------------------------------------------
+
+  [START]
+     ↓
+  planQueriesNode      → LLM generates 3-4 founder-focused search queries.
+     ↓                   On retry, reads missingInformation and generates
+  executeSearchNode    → new targeted queries.
+     ↓                   Tavily runs each query (basic depth, 3 results each).
+  extractDataNode      → Gemini extracts structured data into Zod schema.
+     ↓                   Strict prompt: "Only use provided text, do not invent."
+  [CONDITIONAL EDGE]
+     ├─ if dataConfidence === "low" AND retryCount < 2 → back to planQueriesNode
+     └─ otherwise ↓
+  scoreCompanyNode     → PURE TYPESCRIPT. No LLM. Applies weighted rubric.
+     ↓                   Enforces floor rule. Computes verdict.
+  decideOutcomeNode    → Gemini writes final VC memo narrative (prose only).
+     ↓                   Math is already done — LLM just writes the reasoning.
+  [END]
+
+Max retries: 2 (so the agent can search up to 3 times for thin data).
+
+--------------------------------------------------------------------------------
+SCORING RUBRIC — "Founder Execution Score"
+--------------------------------------------------------------------------------
+Category         | Weight | What it measures
+-----------------|--------|--------------------------------------------------
+Track Record     |  30%   | Prior startups, exits, shutdowns & relevance
+Domain-Founder   |  25%   | Does background match problem? Pivot flag?
+Team Velocity    |  25%   | Key leadership hires found, hiring trend
+Conviction       |  20%   | Co-founder stability, personal stake, tenure
+
+SCORING LOGIC (scoreCompanyNode — pure TypeScript):
+  Track Record:
+    - Has exits                          → 9
+    - Has ventures, no shutdowns         → 7
+    - Has shutdowns                      → 4
+    - No prior ventures found            → 3
+
+  Domain Fit:
+    - >1 relevant background credentials → 8 (base)
+    - Pivot flag detected                → -3 (penalty)
+
+  Team Velocity:
+    - ≥2 key hires found                 → 8
+    - 1 hire found                       → 5
+    - 0 hires found                      → 3
+
+  Conviction:
+    - Co-founder stable                  → 8
+    - Departures found                   → 2
+    - Unclear                            → 6
+
+WEIGHTED TOTAL = (TR×0.30) + (DF×0.25) + (VEL×0.25) + (CONV×0.20)
+
+DECISION RULES:
+  Invest          → weighted score ≥ 7.0  AND  no single category < 4
+  Pass with note  → weighted score 5.5–7.0 (mixed signals)
+  Pass            → weighted score < 5.5  OR  any single category < 4  ← FLOOR RULE
+  Inconclusive    → dataConfidence === "low" OR missingInformation.length > 3
+
+--------------------------------------------------------------------------------
+ZOD SCHEMA — FounderSignalSchema
+--------------------------------------------------------------------------------
+{
+  trackRecord: {
+    priorVentures: [{ name, outcome: "exit|shutdown|still_running|unclear", relevance }],
+    rawEvidence: string   ← direct quotes from search results
+  },
+  domainFit: {
+    relevantBackground: string[],
+    pivotFlag: boolean,
+    rawEvidence: string
+  },
+  teamVelocity: {
+    keyHiresFound: string[],
+    hiringTrendNote: string,
+    rawEvidence: string
+  },
+  conviction: {
+    cofounderStability: "stable|departures_found|unclear",
+    personalStakeNote: string,
+    rawEvidence: string
+  },
+  dataConfidence: "high|medium|low",
+  missingInformation: string[]  ← feeds the retry loop
+}
+
+rawEvidence in every category is critical — it grounds the UI display and
+prevents the LLM from hallucinating scores without actual evidence.
+
+--------------------------------------------------------------------------------
+API ENDPOINT
+--------------------------------------------------------------------------------
+POST /api/research
+Body:    { "companyName": "Stripe" }
+Returns:
+{
+  "success": true,
+  "data": {
+    "companyName": "Stripe",
+    "queriesRun": ["Stripe founder background", "Patrick Collison prior startups", ...],
+    "scores": {
+      "trackRecord": { "score": 9, "rawEvidence": "..." },
+      "domainFit":   { "score": 8, "rawEvidence": "..." },
+      "teamVelocity":{ "score": 8, "rawEvidence": "..." },
+      "conviction":  { "score": 8, "rawEvidence": "..." },
+      "weightedTotal": 8.45,
+      "verdict": "Invest"
+    },
+    "finalReasoning": "Stripe's founding team demonstrates ...",
+    "extractedData": { ... full schema ... }
+  }
+}
+
+--------------------------------------------------------------------------------
+WHAT STILL NEEDS TO BE DONE
+--------------------------------------------------------------------------------
+  [ ] 1. Run `npm install` in /home/vishal/Desktop/Agent
+         (couldn't auto-run — npm was asking for interactive confirmations)
+
+  [ ] 2. Fill in .env.local with your actual API keys:
+         TAVILY_API_KEY=tvly-...
+         GEMINI_API_KEY=AIza...
+         - Tavily free tier: https://app.tavily.com/sign-in
+         - Gemini API key:   https://aistudio.google.com/app/apikey
+
+  [ ] 3. Frontend UI — User to provide wireframe/layout description.
+         The "founder dossier / case file" UI components will be built
+         once the layout design is shared.
+
+  [ ] 4. README.md — Full documentation with:
+         - Overview, Setup, Architecture, Philosophy
+         - Key decisions & trade-offs
+         - Example runs (3-5 companies incl. ambiguous cases)
+         - What to improve with more time
+
+  [ ] 5. Test each node in isolation via a CLI script before UI integration.
+
+  [ ] 6. Deploy to Vercel and get a shareable link.
+
+--------------------------------------------------------------------------------
+QUICK START (once npm install is done)
+--------------------------------------------------------------------------------
+  1. cd /home/vishal/Desktop/Agent
+  2. Fill in .env.local
+  3. npm run dev
+  4. Open http://localhost:3000
+  5. Test the API: POST http://localhost:3000/api/research
+     Body: { "companyName": "Notion" }
+
+To test via curl:
+  curl -X POST http://localhost:3000/api/research \
+    -H "Content-Type: application/json" \
+    -d '{"companyName": "Notion"}'
+
+--------------------------------------------------------------------------------
+DESIGN DECISIONS & TRADE-OFFS
+--------------------------------------------------------------------------------
+1. Why Iterative (not Parallel) architecture?
+   → Chosen to ensure the floor rule is well-enforced. If evidence for one
+     category is thin, the agent searches again rather than incorrectly
+     flagging the category as a failure.
+
+2. Why scoring is pure TypeScript, not LLM?
+   → LLMs are inconsistent with arithmetic. The rubric math MUST be
+     deterministic and auditable. The LLM's job is prose, not math.
+
+3. Why Tavily over DuckDuckGo scraping?
+   → DDG scraping is fragile and easily rate-limited. Tavily returns clean
+     content (not raw HTML) and is purpose-built for AI agents.
+
+4. Why Gemini 1.5 Flash (not Pro)?
+   → Flash is fast and cheap for this structured extraction task. Pro is
+     overkill for extracting known schema fields from short search snippets.
+
+5. Why rawEvidence in every category?
+   → Forces grounding — the LLM cannot assign a score without citing actual
+     text. Also powers the frontend: each score card shows WHY it got that score.
+
+6. Why missingInformation[] in the schema?
+   → Enables the retry loop to be targeted, not random. Instead of "search again
+     generally", the agent knows specifically what to look for on the next pass.
+
+--------------------------------------------------------------------------------
+EDGE CASES TO WATCH OUT FOR
+--------------------------------------------------------------------------------
+  - Ambiguous company names (e.g. "Apple" → many results for wrong company)
+    → Consider adding city/sector context to the initial prompt
+  - Very new companies with no online presence
+    → dataConfidence will be "low" → Inconclusive verdict (correct behavior)
+  - Common founder names returning wrong people's LinkedIn profiles
+    → rawEvidence field helps spot this in the UI
+  - Tavily rate limits on free tier (1000 searches/month)
+    → Add a cache layer before production deployment
+  - Search returning only PR/marketing content, not real founder data
+    → The missingInformation field will catch this and trigger retry
+
+================================================================================
+END OF SUMMARY
+================================================================================
