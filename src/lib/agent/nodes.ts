@@ -54,7 +54,6 @@ Generate 2-3 NEW queries specifically targeting this missing information. Return
     const jsonStr = text.replace(/^```json/, "").replace(/```$/, "").trim();
     queries = JSON.parse(jsonStr);
   } catch (e) {
-    // fallback queries
     queries = [
       `${searchTarget} founders background`,
       `${searchTarget} founders previous startups exits`,
@@ -158,13 +157,11 @@ export const scoreCompanyNode = async (state: typeof AgentState.State) => {
     return { scores: conflictScores };
   }
 
-  // Weights
   const wTrackRecord = 0.30;
   const wDomainFit = 0.25;
   const wVelocity = 0.25;
   const wConviction = 0.20;
 
-  // Track Record logic
   let trScore = 5;
   const exits = extractedData.trackRecord.priorVentures.filter(v => v.outcome === "exit");
   const shutdowns = extractedData.trackRecord.priorVentures.filter(v => v.outcome === "shutdown");
@@ -173,12 +170,10 @@ export const scoreCompanyNode = async (state: typeof AgentState.State) => {
   else if (shutdowns.length > 0) trScore = 4;
   else if (extractedData.trackRecord.priorVentures.length === 0) trScore = 3;
 
-  // Domain Fit logic
   let dfScore = 5;
   if (extractedData.domainFit.relevantBackground.length > 1) dfScore = 8;
   if (extractedData.domainFit.pivotFlag) dfScore -= 3;
 
-  // Velocity logic
   let velScore = 5;
   if (extractedData.teamVelocity.keyHiresFound.length >= 2) velScore = 8;
   else if (extractedData.teamVelocity.keyHiresFound.length === 0) velScore = 3;
@@ -199,7 +194,6 @@ export const scoreCompanyNode = async (state: typeof AgentState.State) => {
     else if (timing === "unclear") convScore = 3; // cautious default — departure confirmed, timing unknown
     else                           convScore = 3; // fallback for unexpected values
   }
-  // cofounderStability === "unclear" stays at default 6
 
   const weightedTotal = 
     (trScore * wTrackRecord) + 
@@ -239,7 +233,6 @@ export const decideOutcomeNode = async (state: typeof AgentState.State) => {
 
   if (!scores || !extractedData) throw new Error("Missing data for decision");
 
-  // Short-circuit if we have an entity conflict
   if (scores.verdict === "Entity Conflict") {
     return { finalReasoning: "Search results appear to reference multiple different entities. Please add a sector or location to disambiguate." };
   }

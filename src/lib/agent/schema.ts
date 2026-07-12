@@ -38,9 +38,6 @@ export const FounderSignalSchema = z.object({
 
 export type FounderSignalType = z.infer<typeof FounderSignalSchema>;
 
-// ScoredCategory and FounderScores are defined in ./types and re-exported above.
-
-// Define the state for the LangGraph
 export const AgentState = Annotation.Root({
   companyName: Annotation<string>(),
   queries: Annotation<string[]>(),
@@ -49,7 +46,6 @@ export const AgentState = Annotation.Root({
     value: (state, update) => state.concat(update),
     default: () => [],
   }),
-  // Last-write-wins for all other fields — `value: (_, u) => u` means "take the new value"
   extractedData: Annotation<FounderSignalType | null>({
     value: (_, update) => update,
     default: () => null,

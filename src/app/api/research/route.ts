@@ -39,7 +39,6 @@ export async function POST(req: NextRequest) {
             controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
           }
           
-          // Signal the end of the graph execution
           controller.enqueue(encoder.encode(`data: {"done": true}\n\n`));
           controller.close();
         } catch (err: any) {

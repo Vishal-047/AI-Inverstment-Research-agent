@@ -13,9 +13,6 @@ type ResearchResult = {
   finalReasoning: string;
 };
 
-// ────────────────────────────────────────────────────────────
-// Score card config
-// ────────────────────────────────────────────────────────────
 const CATEGORIES: {
   key: keyof Omit<FounderScores, "weightedTotal" | "verdict">;
   label: string;
@@ -27,9 +24,6 @@ const CATEGORIES: {
   { key: "conviction",   label: "Conviction",      weight: "20%" },
 ];
 
-// ────────────────────────────────────────────────────────────
-// Verdict banner colour
-// ────────────────────────────────────────────────────────────
 const VERDICT_STYLES: Record<FounderScores["verdict"], string> = {
   "Invest":         "bg-green-100 border-green-500 text-green-900",
   "Pass with note": "bg-yellow-100 border-yellow-500 text-yellow-900",
@@ -46,16 +40,12 @@ const VERDICT_LABEL_STYLES: Record<FounderScores["verdict"], string> = {
   "Entity Conflict": "bg-orange-500 text-white",
 };
 
-// Score badge colour
 function scoreBadgeClass(score: number): string {
   if (score >= 7) return "bg-green-100 text-green-800";
   if (score >= 4) return "bg-yellow-100 text-yellow-800";
   return "bg-red-100 text-red-800";
 }
 
-// ────────────────────────────────────────────────────────────
-// Main Page
-// ────────────────────────────────────────────────────────────
 export default function Home() {
   const [company, setCompany] = useState("");
   const [context, setContext] = useState("");
@@ -169,7 +159,6 @@ export default function Home() {
     <main className="min-h-screen bg-white text-gray-900 font-sans">
       <div className="max-w-3xl mx-auto px-4 py-12 space-y-8">
 
-        {/* ── Header ── */}
         <div className="text-center space-y-1">
           <h1 className="text-2xl font-bold tracking-tight">
             AI Investment Research Agent
@@ -179,7 +168,6 @@ export default function Home() {
           </p>
         </div>
 
-        {/* ── Scope disclaimer ── */}
         <div className="border border-amber-200 bg-amber-50 rounded px-4 py-3 text-sm text-amber-800">
           <strong>⚠ Designed for early-stage startups (0–5 years old).</strong>{" "}
           Scores for established public companies (Google, Microsoft, Apple) will be unreliable —
@@ -196,7 +184,6 @@ export default function Home() {
           </span>
         </div>
 
-        {/* ── Input ── */}
         <div className="flex flex-col gap-2">
           <div className="flex gap-2">
             <input
@@ -230,21 +217,18 @@ export default function Home() {
           />
         </div>
 
-        {/* ── Error ── */}
         {error && (
           <div className="border border-red-300 bg-red-50 text-red-800 text-sm rounded px-4 py-3">
             <strong>Error:</strong> {error}
           </div>
         )}
 
-        {/* ── Loading: stream events & query list ── */}
         {loading && !result && (
           <div className="space-y-4">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
               Running Agent… <span className="font-normal normal-case text-gray-400">(this takes ~60–90 seconds)</span>
             </p>
             
-            {/* Stream Events */}
             <ul className="space-y-2 text-sm text-gray-700">
               {streamEvents.map((evt, i) => (
                 <li key={i} className="flex items-center gap-2">
@@ -260,7 +244,6 @@ export default function Home() {
               )}
             </ul>
 
-            {/* Queries block */}
             {queries.length > 0 && (
               <div className="pt-2 border-t border-gray-100">
                 <p className="text-xs font-semibold text-gray-400 mb-1">Queries generated:</p>
@@ -274,11 +257,9 @@ export default function Home() {
           </div>
         )}
 
-        {/* ── Results ── */}
         {result && (
           <div className="space-y-8">
 
-            {/* Queries run */}
             <div className="space-y-1">
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
                 Searches run for "{result.companyName}"
@@ -290,7 +271,6 @@ export default function Home() {
               </ul>
             </div>
 
-            {/* Score cards — 2×2 grid */}
             {result.scores.verdict !== "Entity Conflict" && (
               <div>
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
@@ -304,13 +284,11 @@ export default function Home() {
                         key={key}
                         className="border border-gray-200 rounded p-4 space-y-2"
                       >
-                        {/* Header row */}
                         <div className="flex items-center justify-between">
                           <span className="text-sm font-semibold">{label}</span>
                           <span className="text-xs text-gray-400">{weight}</span>
                         </div>
 
-                        {/* Score badge */}
                         <div>
                           <span
                             className={`inline-block text-sm font-bold px-2 py-0.5 rounded ${scoreBadgeClass(cat.score)}`}
@@ -319,7 +297,6 @@ export default function Home() {
                           </span>
                         </div>
 
-                        {/* Raw evidence — truncated to 2 lines */}
                         <p className="text-xs text-gray-600 leading-relaxed line-clamp-2">
                           {cat.rawEvidence || "No evidence found."}
                         </p>
@@ -330,7 +307,6 @@ export default function Home() {
               </div>
             )}
 
-            {/* Verdict banner */}
             <div
               className={`border-l-4 rounded p-5 space-y-2 ${VERDICT_STYLES[result.scores.verdict]}`}
             >
