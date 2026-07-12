@@ -1,161 +1,146 @@
-# AI Investment Research Agent
+# FounderLens — AI Investment Research Agent
 
-An AI-powered investment research tool that evaluates startup founding teams and returns a structured verdict: **Invest / Pass with note / Pass / Inconclusive**.
-
-> **Core philosophy:** Back the founder, not just the market. Early-stage outcomes are driven more by *who* is building than *what* is being built.
+> An AI agent that researches a company's founding team and returns an
+> investment verdict — Invest / Pass with note / Pass / Inconclusive — through
+> the lens of founder & execution quality, not just market opportunity.
 
 ---
 
-## Live Demo
+## Overview
 
-> Deployed on Vercel: _link coming soon_
+FounderLens is an autonomous research assistant designed for early-stage startup investing. Rather than solely analyzing market sizes or generic product pitches, it programmatically evaluates a startup's DNA: the founders. It uses a structured four-part rubric to assess track record, domain fit, velocity, and conviction. 
+
+**Tech Stack:** Next.js (App Router), LangGraph.js, Google `gemini-3.5-flash`, and Tavily Search API.
+
+**Live demo:** [Vercel URL]  
+**Repo:** [GitHub URL]  
+
+---
+
+## How to Run It
+
+### Prerequisites
+- Node.js 18+
+- A free Google AI Studio API key: https://aistudio.google.com/app/apikey
+- A free Tavily API key: https://app.tavily.com/sign-in
+
+### Setup
+```bash
+git clone https://github.com/Vishal-047/AI-Inverstment-Research-agent.git
+cd AI-Inverstment-Research-agent
+npm install
+cp .env.example .env.local
+# then fill in .env.local with:
+#   GOOGLE_API_KEY=your-key-here
+#   TAVILY_API_KEY=your-key-here
+npm run dev
+```
+Open http://localhost:3000
+
+### Testing the API directly
+```bash
+curl -X POST http://localhost:3000/api/research \
+  -H "Content-Type: application/json" \
+  -d '{"companyName": "Cursor"}'
+```
+
+*(Note: A full run takes ~60-90 seconds due to multiple search + LLM calls; the UI utilizes Server-Sent Events (SSE) to show live progress via streaming.)*
 
 ---
 
 ## How It Works
 
-You type a company name → the agent researches the founding team → returns a scored verdict.
+### Philosophy
+This agent evaluates companies primarily through founder and execution quality, not just market opportunity. In early-stage venture capital, outcomes are driven disproportionately by *who* is building rather than *what* is being built. Pivot rates are high, so backing a high-velocity, resilient team with domain expertise is the most reliable leading indicator of success.
 
+### Architecture
 ```
-Input (company name)
-  → Query Planner Node   — Gemini generates 4 targeted founder-focused search queries
-  → Search Node          — Tavily fetches real web results for each query
-  → Extraction Node      — Gemini extracts structured data (exits, domain fit, hires, stability)
-  → Scoring Node         — Pure TypeScript applies weighted rubric + floor rule
-  → Decision Node        — Gemini writes final VC memo narrative
-  → Output (verdict + scores + evidence)
+START → planQueries → executeSearch → extractData
+              ↑                            ↓
+              └── retry if low confidence ──┘
+                                             ↓
+                                       scoreCompany (pure TS)
+                                             ↓
+                                       decideOutcome (LLM narrative)
+                                             ↓
+                                            END
 ```
 
-The graph is **iterative**: if `dataConfidence` is low after the first pass, the agent loops back and generates more targeted queries (max 2 retries).
+- **planQueries** — Analyzes the company name/context and generates specific, tailored search queries aimed at finding founder backgrounds, traction, and team dynamics.
+- **executeSearch** — Uses Tavily to execute the planned queries across the web, aggregating LLM-optimized search results.
+- **extractData** — Uses structured LLM extraction (via Zod) to pull hard facts out of the search results, explicitly requiring a `rawEvidence` citation for every data point.
+- **scoreCompany** — Pure TypeScript node that calculates the weighted investment score. Math is strictly handled in code, never by the LLM.
+- **decideOutcome** — The LLM reads the final computed score and raw evidence, drafting a cohesive investment memo justifying the mathematical verdict.
 
----
-
-## Scoring Rubric — "Founder Execution Score"
-
+### Scoring Rubric — "Founder Execution Score"
 | Category | Weight | What it measures |
 |---|---|---|
-| Track Record | 30% | Prior startups, exits, shutdowns |
-| Domain-Founder Fit | 25% | Does background genuinely match the problem? |
-| Team Velocity | 25% | Key leadership hires found |
-| Conviction | 20% | Co-founder stability, tenure, personal stake |
+| Track Record | 30% | Previous startup ventures and their specific outcomes (exit, shutdown, still running). |
+| Domain-Founder Fit | 25% | Relevant background matching the current venture and whether there are signs of major pivots. |
+| Team Velocity | 25% | Key leadership hires found and notes on the overall hiring trend. |
+| Conviction | 20% | Co-founder stability, departure timing (early vs late), and notes on the founders' personal stake. |
 
-**Decision rules:**
-- **Invest** → weighted score ≥ 7.0 AND no single category < 4
-- **Pass with note** → weighted score 5.5–7.0
-- **Pass** → score < 5.5 OR any single category < 4 *(floor rule)*
-- **Inconclusive** → insufficient data across most categories
-
-> ⚠ **Best suited for startups 0–5 years old.** Scores for large public companies (Google, Microsoft) are unreliable — their founding signals are decades old and buried under corporate noise.
-
----
-
-## Tech Stack
-
-| Layer | Technology |
-|---|---|
-| Framework | Next.js 16 (App Router, TypeScript) |
-| Agent Orchestration | LangGraph.js (StateGraph) |
-| LLM | Google Gemini 2.0 Flash |
-| Web Search | Tavily API (free tier) |
-| Schema Validation | Zod |
-| Styling | Tailwind CSS |
-| Deployment | Vercel |
-
----
-
-## Setup & Run
-
-### 1. Clone the repo
-
-```bash
-git clone https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git
-cd YOUR_REPO_NAME
-```
-
-### 2. Install dependencies
-
-```bash
-npm install
-```
-
-### 3. Set up environment variables
-
-Create `.env.local` in the root:
-
-```env
-GOOGLE_API_KEY=your_google_ai_studio_key
-TAVILY_API_KEY=your_tavily_api_key
-```
-
-- **Google AI Studio key**: [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
-- **Tavily key** (free tier): [app.tavily.com](https://app.tavily.com)
-
-### 4. Run locally
-
-```bash
-npm run dev
-```
-
-Open [http://localhost:3000](http://localhost:3000). Type a startup name and click **Research**. Expect ~60–90 seconds for a full run.
+**Decision rule (Scale 0-10):** 
+- **Invest**: Weighted Score ≥ 7.0
+- **Pass with note**: Weighted Score 5.5 - 6.9
+- **Pass**: Weighted Score < 5.5
+- **Inconclusive**: If search data is too thin to make a confident assessment.
+- **Floor Rule**: If a company scores `< 4.0` in *any* of the four categories (Track Record, Domain Fit, Velocity, or Conviction), the final verdict is automatically downgraded to "Pass" regardless of the total weighted score.
 
 ---
 
 ## Key Decisions & Trade-offs
 
-**Why iterative graph (not linear or parallel)?**
-The floor rule requires high confidence in every category. If evidence for one category is thin on the first search pass, the agent loops back with targeted queries rather than incorrectly penalising the company for missing data.
-
-**Why TypeScript for scoring (not LLM)?**
-LLMs are inconsistent with arithmetic. The rubric math must be deterministic and auditable. The LLM only writes prose — the numbers come from pure TypeScript.
-
-**Why Tavily over DuckDuckGo scraping?**
-DDG scraping is fragile and rate-limited. Tavily returns clean content (not raw HTML) and is purpose-built for AI agents. The free tier (1000 searches/month) is sufficient for demos and evaluation.
-
-**Why `rawEvidence` in every schema field?**
-Forces grounding — the LLM cannot assign a score without citing actual text. Also powers the UI: each score card shows exactly *why* it got that score.
+- **Streaming Architecture (SSE)** — Switched from a blocking invoke to an iterative event stream (`graph.stream`). A 90-second blocked request creates terrible UX, so streaming intermediate node transitions provides instant transparency.
+- **Bounded retries (max 2), not unbounded** — The graph retries if the LLM reports low confidence in the extracted data. This is strictly bounded to prevent infinite loops, establishing a hard cost/latency ceiling.
+- **Tavily over free scraping (e.g. DuckDuckGo)** — We opted for a paid search API because Tavily returns cleaned, LLM-ready markdown content. Scraping raw HTML introduced too much token bloat and unreliability.
+- **Gemini 3.5 Flash over Pro** — Flash is significantly cheaper and faster, yet perfectly capable of structured JSON extraction (via `withStructuredOutput`) when prompted correctly.
+- **Scoring is pure TypeScript, not LLM-decided** — LLMs are notoriously bad at consistent math and strict boundary rules. Calculating the score in TS guarantees determinism and auditability.
+- **`rawEvidence` required on every category** — The Zod schema requires the LLM to output an exact quote/link justifying its score. This eliminates hallucinated scores and grounds the final memo.
+- **Co-founder departure timing (early vs. late)** — Initially, any founder departure triggered a severe penalty. We refactored this into an object tracking the *timing* of departures, ensuring late-stage, amicable transitions aren't unfairly punished like early-stage blow-ups.
+- **Entity-conflict short-circuits scoring rather than retrying** — If the LLM detects search results are mixing two different companies (e.g., "Stripe" the fintech vs "Stripe" the clothing brand), it immediately halts execution. Retrying Tavily won't fix name ambiguity—it just burns API quota.
+- **What I deliberately left out** — There is no caching layer and no integration with paid financial APIs (like Pitchbook). The agent is strictly calibrated for early-stage/startup evaluation, so evaluating mature public companies will yield noisy results.
 
 ---
 
 ## Example Runs
 
-| Company | Score | Verdict | Notes |
-|---|---|---|---|
-| **Microsoft** | ~4.7 | Pass | Allen departure flagged → conviction = 2 → floor rule fires |
-| **Google** | ~7.7 | Invest | Textbook domain fit (PhD + PageRank), stable co-founders |
-| **Cursor** | TBD | — | Try it — designed exactly for this type of startup |
-| **Perplexity** | TBD | — | Strong AI research background, recent hires |
-| **Linear** | TBD | — | Small, high-conviction founding team |
+### 1. Microsoft (Pass with note)
+*Note: This was a genuinely tested run from our chat history.*
+- **Verdict**: Pass with note
+- **What happened**: Microsoft did not achieve an "Invest" due to its mature stage, requiring stronger track record and domain fit scores for an early-stage rubric. However, thanks to the late-departure timing logic, it no longer gets unfairly hammered by late-career executive transitions, resulting in a balanced "Pass with note" rather than a hard fail.
+
+### 2. [Insert Real "Invest" Run Here]
+- **Verdict**: 
+- **Weighted score**: 
+- **Key reasoning**: *(Run a successful early-stage company here and paste the real output)*
+
+### 3. [Insert Real "Inconclusive" Run Here]
+- **Verdict**: Inconclusive
+- **What happened**: *(Run an obscure stealth startup here and paste the real retry/inconclusive behavior)*
+
+### 4. Stripe (Entity Conflict)
+*Note: The previous "Invest" outcome for Stripe was illustrative. Please run this live to get the real API response and paste it here.*
+- **Without sector context**: The agent detects conflicting entities and the `entityConsistencyFlag` trips, short-circuiting the graph.
+- **With "fintech" context added**: *(Run this live and paste the real result here)*
 
 ---
 
-## What I'd Improve With More Time
+## What I Would Improve With More Time
 
-1. **Streaming updates** — Replace single HTTP wait with SSE so each node completion shows in real time
-2. **Graduated scoring** — Current scoring uses hard thresholds; a continuous scale would be more nuanced
-3. **Smarter co-founder departure rule** — Penalise early departures (<2yr) heavily, reduce penalty for later transitions
-4. **Disambiguation** — Add city/sector input for ambiguous company names
-5. **Search caching** — Cache results by company name to avoid redundant API calls
-6. **LinkedIn-specific queries** — Target `site:linkedin.com` for higher-quality founder data
+- **Graduated scoring instead of threshold buckets** — Hard cutoffs (like 75) are brittle. A continuous confidence spectrum would allow for more nuanced borderline evaluations.
+- **Caching layer** — Implementing a database (like Redis/Postgres) to hash company queries and cache Tavily/Gemini responses to drastically reduce redundant API costs.
+- **Domain-filtered search** — Forcing Tavily to only query specific high-signal domains (linkedin.com, crunchbase.com, techcrunch.com) to filter out SEO spam and noisy press releases.
+- **Human-in-the-loop Disambiguation** — Instead of fully halting on an entity conflict, prompt the user mid-stream for the context, then resume the graph automatically.
 
 ---
 
-## Project Structure
+## AI Chat Logs (Bonus)
 
-```
-src/
-├── app/
-│   ├── page.tsx                  # Frontend UI
-│   └── api/research/route.ts     # POST /api/research endpoint
-└── lib/
-    └── agent/
-        ├── schema.ts             # Zod schema + LangGraph AgentState
-        ├── nodes.ts              # 5 agent node functions
-        ├── graph.ts              # StateGraph wiring + routing
-        └── types.ts              # Shared client-safe TypeScript types
-```
+Full session transcripts from building this project are included in `/chat-logs`. They cover:
+- Initial architecture planning and trade-off discussions.
+- Backend implementation (LangGraph nodes, schema design).
+- Debugging real issues encountered (e.g., Gemini model authentication, quota exhaustion, LangGraph Annotation API changes).
+- The Tier 1 improvements (founder departure timing, disambiguation, streaming) and the exact reasoning behind each design decision.
 
----
-
-## License
-
-MIT
+See `/chat-logs/README.md` for an index.
