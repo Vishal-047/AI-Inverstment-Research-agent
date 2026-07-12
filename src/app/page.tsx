@@ -35,6 +35,7 @@ const VERDICT_STYLES: Record<FounderScores["verdict"], string> = {
   "Pass with note": "bg-yellow-100 border-yellow-500 text-yellow-900",
   "Pass":           "bg-gray-100 border-gray-500 text-gray-900",
   "Inconclusive":   "bg-blue-100 border-blue-500 text-blue-900",
+  "Entity Conflict": "bg-orange-100 border-orange-500 text-orange-900",
 };
 
 const VERDICT_LABEL_STYLES: Record<FounderScores["verdict"], string> = {
@@ -42,6 +43,7 @@ const VERDICT_LABEL_STYLES: Record<FounderScores["verdict"], string> = {
   "Pass with note": "bg-yellow-500 text-white",
   "Pass":           "bg-gray-500 text-white",
   "Inconclusive":   "bg-blue-500 text-white",
+  "Entity Conflict": "bg-orange-500 text-white",
 };
 
 // Score badge colour
@@ -56,10 +58,12 @@ function scoreBadgeClass(score: number): string {
 // ────────────────────────────────────────────────────────────
 export default function Home() {
   const [company, setCompany] = useState("");
+  const [context, setContext] = useState("");
   const [loading, setLoading] = useState(false);
-  const [queries, setQueries]   = useState<string[]>([]);
-  const [result, setResult]     = useState<ResearchResult | null>(null);
-  const [error, setError]       = useState<string | null>(null);
+  const [queries, setQueries] = useState<string[]>([]);
+  const [result, setResult] = useState<ResearchResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [streamEvents, setStreamEvents] = useState<{ node: string; detail: string }[]>([]);
 
   const handleResearch = async () => {
     if (!company.trim()) return;
@@ -68,26 +72,91 @@ export default function Home() {
     setResult(null);
     setError(null);
     setQueries([]);
+    setStreamEvents([{ node: "start", detail: "Initializing research agent..." }]);
 
     try {
       const res = await fetch("/api/research", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ companyName: company.trim() }),
+        body: JSON.stringify({ companyName: company.trim(), context: context.trim() }),
       });
 
-      const json = await res.json();
-
-      if (!res.ok || !json.success) {
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
         setError(json.error || "Something went wrong.");
+        setLoading(false);
         return;
       }
 
-      setQueries(json.data.queriesRun ?? []);
-      setResult(json.data);
+      if (!res.body) throw new Error("No response body");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let currentResult: Partial<ResearchResult> = {
+        companyName: company.trim(),
+        queriesRun: [],
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunkStr = decoder.decode(value, { stream: true });
+        const lines = chunkStr.split("\n\n");
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const dataStr = line.replace("data: ", "").trim();
+          if (!dataStr) continue;
+
+          try {
+            const parsed = JSON.parse(dataStr);
+            
+            if (parsed.error) {
+              setError(parsed.error);
+              setLoading(false);
+              return;
+            }
+            if (parsed.done) {
+              setResult(currentResult as ResearchResult);
+              setLoading(false);
+              return;
+            }
+
+            const { node, data } = parsed;
+
+            if (node === "planQueries") {
+              const isRetry = currentResult.queriesRun && currentResult.queriesRun.length > 0;
+              setStreamEvents(prev => [...prev, { 
+                node, 
+                detail: isRetry ? "Found thin evidence, searching again..." : "Generated targeted search queries" 
+              }]);
+              if (data.queries) {
+                currentResult.queriesRun = [...(currentResult.queriesRun || []), ...data.queries];
+                setQueries(currentResult.queriesRun);
+              }
+            } else if (node === "executeSearch") {
+              setStreamEvents(prev => [...prev, { node, detail: "Fetched live web search results" }]);
+            } else if (node === "extractData") {
+              setStreamEvents(prev => [...prev, { node, detail: "Extracted and validated founder signals" }]);
+            } else if (node === "scoreCompany") {
+              setStreamEvents(prev => [...prev, { node, detail: "Applied scoring rubric" }]);
+              if (data.scores) currentResult.scores = data.scores;
+              
+              if (data.scores?.verdict === "Entity Conflict") {
+                setStreamEvents(prev => [...prev, { node: "early_exit", detail: "Entity conflict detected. Halting." }]);
+              }
+            } else if (node === "decideOutcome") {
+              setStreamEvents(prev => [...prev, { node, detail: "Drafted investment memo" }]);
+              if (data.finalReasoning) currentResult.finalReasoning = data.finalReasoning;
+            }
+          } catch (e) {
+            // Ignore parsing errors for partial chunks
+          }
+        }
+      }
     } catch (e: any) {
       setError(e.message || "Network error.");
-    } finally {
       setLoading(false);
     }
   };
@@ -128,25 +197,37 @@ export default function Home() {
         </div>
 
         {/* ── Input ── */}
-        <div className="flex gap-2">
+        <div className="flex flex-col gap-2">
+          <div className="flex gap-2">
+            <input
+              id="company-input"
+              type="text"
+              value={company}
+              onChange={(e) => setCompany(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Enter company name (e.g. Notion, Stripe, Linear)"
+              className="flex-1 border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400"
+              disabled={loading}
+            />
+            <button
+              id="research-btn"
+              onClick={handleResearch}
+              disabled={loading || !company.trim()}
+              className="px-4 py-2 bg-gray-900 text-white text-sm rounded disabled:opacity-40 hover:bg-gray-700"
+            >
+              {loading ? "Researching…" : "Research"}
+            </button>
+          </div>
           <input
-            id="company-input"
+            id="context-input"
             type="text"
-            value={company}
-            onChange={(e) => setCompany(e.target.value)}
+            value={context}
+            onChange={(e) => setContext(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Enter company name (e.g. Notion, Stripe, Linear)"
-            className="flex-1 border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400"
+            placeholder="Sector or location (optional, helps disambiguate common names, e.g. fintech, Bangalore)"
+            className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400"
             disabled={loading}
           />
-          <button
-            id="research-btn"
-            onClick={handleResearch}
-            disabled={loading || !company.trim()}
-            className="px-4 py-2 bg-gray-900 text-white text-sm rounded disabled:opacity-40 hover:bg-gray-700"
-          >
-            {loading ? "Researching…" : "Research"}
-          </button>
         </div>
 
         {/* ── Error ── */}
@@ -156,20 +237,39 @@ export default function Home() {
           </div>
         )}
 
-        {/* ── Loading: query list ── */}
-        {loading && (
-          <div className="space-y-2">
+        {/* ── Loading: stream events & query list ── */}
+        {loading && !result && (
+          <div className="space-y-4">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-              Running searches… <span className="font-normal normal-case text-gray-400">(this takes ~60–90 seconds)</span>
+              Running Agent… <span className="font-normal normal-case text-gray-400">(this takes ~60–90 seconds)</span>
             </p>
-            {queries.length === 0 ? (
-              <p className="text-sm text-gray-400 italic">Generating queries…</p>
-            ) : (
-              <ul className="space-y-1 text-sm text-gray-700 list-disc list-inside">
-                {queries.map((q, i) => (
-                  <li key={i}>{q}</li>
-                ))}
-              </ul>
+            
+            {/* Stream Events */}
+            <ul className="space-y-2 text-sm text-gray-700">
+              {streamEvents.map((evt, i) => (
+                <li key={i} className="flex items-center gap-2">
+                  <span className="text-green-500 font-bold">✓</span>
+                  <span>{evt.detail}</span>
+                </li>
+              ))}
+              {!error && (
+                <li className="flex items-center gap-2 text-gray-500 animate-pulse">
+                  <span className="w-4 h-4 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin"></span>
+                  <span>Processing next step...</span>
+                </li>
+              )}
+            </ul>
+
+            {/* Queries block */}
+            {queries.length > 0 && (
+              <div className="pt-2 border-t border-gray-100">
+                <p className="text-xs font-semibold text-gray-400 mb-1">Queries generated:</p>
+                <ul className="space-y-1 text-sm text-gray-500 list-disc list-inside">
+                  {queries.map((q, i) => (
+                    <li key={i}>{q}</li>
+                  ))}
+                </ul>
+              </div>
             )}
           </div>
         )}
@@ -191,42 +291,44 @@ export default function Home() {
             </div>
 
             {/* Score cards — 2×2 grid */}
-            <div>
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
-                Founder Execution Scores
-              </p>
-              <div className="grid grid-cols-2 gap-4">
-                {CATEGORIES.map(({ key, label, weight }) => {
-                  const cat = result.scores[key];
-                  return (
-                    <div
-                      key={key}
-                      className="border border-gray-200 rounded p-4 space-y-2"
-                    >
-                      {/* Header row */}
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-semibold">{label}</span>
-                        <span className="text-xs text-gray-400">{weight}</span>
-                      </div>
+            {result.scores.verdict !== "Entity Conflict" && (
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
+                  Founder Execution Scores
+                </p>
+                <div className="grid grid-cols-2 gap-4">
+                  {CATEGORIES.map(({ key, label, weight }) => {
+                    const cat = result.scores[key];
+                    return (
+                      <div
+                        key={key}
+                        className="border border-gray-200 rounded p-4 space-y-2"
+                      >
+                        {/* Header row */}
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-semibold">{label}</span>
+                          <span className="text-xs text-gray-400">{weight}</span>
+                        </div>
 
-                      {/* Score badge */}
-                      <div>
-                        <span
-                          className={`inline-block text-sm font-bold px-2 py-0.5 rounded ${scoreBadgeClass(cat.score)}`}
-                        >
-                          {cat.score} / 10
-                        </span>
-                      </div>
+                        {/* Score badge */}
+                        <div>
+                          <span
+                            className={`inline-block text-sm font-bold px-2 py-0.5 rounded ${scoreBadgeClass(cat.score)}`}
+                          >
+                            {cat.score} / 10
+                          </span>
+                        </div>
 
-                      {/* Raw evidence — truncated to 2 lines */}
-                      <p className="text-xs text-gray-600 leading-relaxed line-clamp-2">
-                        {cat.rawEvidence || "No evidence found."}
-                      </p>
-                    </div>
-                  );
-                })}
+                        {/* Raw evidence — truncated to 2 lines */}
+                        <p className="text-xs text-gray-600 leading-relaxed line-clamp-2">
+                          {cat.rawEvidence || "No evidence found."}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Verdict banner */}
             <div
@@ -238,9 +340,11 @@ export default function Home() {
                 >
                   {result.scores.verdict}
                 </span>
-                <span className="text-sm font-semibold">
-                  Weighted Score: {result.scores.weightedTotal} / 10
-                </span>
+                {result.scores.verdict !== "Entity Conflict" && (
+                  <span className="text-sm font-semibold">
+                    Weighted Score: {result.scores.weightedTotal} / 10
+                  </span>
+                )}
               </div>
               <p className="text-sm leading-relaxed">
                 {result.finalReasoning}

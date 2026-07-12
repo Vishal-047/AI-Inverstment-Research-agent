@@ -24,10 +24,14 @@ function getLlm() {
 }
 
 export const planQueriesNode = async (state: typeof AgentState.State) => {
-  const { companyName, extractedData, retryCount } = state;
+  const { companyName, context, extractedData, retryCount } = state;
   const llm = getLlm();
 
-  let prompt = `You are an expert startup researcher. Your goal is to generate 3-4 highly specific search queries to find information about the founders of the company "${companyName}". 
+  // When the user provides context (e.g. "fintech, Bangalore"), append it to every
+  // query so Tavily targets the right entity instead of the most famous one with that name.
+  const searchTarget = context ? `${companyName} ${context}` : companyName;
+
+  let prompt = `You are an expert startup researcher. Your goal is to generate 3-4 highly specific search queries to find information about the founders of the company "${searchTarget}". 
 Focus on:
 1. Track record (previous startups, exits)
 2. Domain fit (relevant background to their current product)
@@ -52,10 +56,10 @@ Generate 2-3 NEW queries specifically targeting this missing information. Return
   } catch (e) {
     // fallback queries
     queries = [
-      `${companyName} founders background`,
-      `${companyName} founders previous startups exits`,
-      `${companyName} key leadership hires team`,
-      `${companyName} co-founder departure resignation`,
+      `${searchTarget} founders background`,
+      `${searchTarget} founders previous startups exits`,
+      `${searchTarget} key leadership hires team`,
+      `${searchTarget} co-founder departure resignation`,
     ];
   }
 
@@ -107,6 +111,18 @@ export const extractDataNode = async (state: typeof AgentState.State) => {
   const prompt = `You are a startup analyst. Review the following search results for the company "${companyName}" and extract signals about the founders and execution.
 Only use the provided text. Do not invent information. If information is missing, note it in the missingInformation field and consider setting dataConfidence to medium or low.
 
+IMPORTANT — Conviction / Co-founder departure timing:
+- If a co-founder departure is mentioned, try to infer the TIMING by comparing the company's founding year to the year of the departure news or announcement.
+- Set departureTiming to "early" if the departure happened within approximately 2 years of founding.
+- Set departureTiming to "late" if the departure happened more than 2 years after founding.
+- Set departureTiming to "unclear" if a departure is confirmed but you cannot determine the year from the search results.
+- Set departureTiming to "not_applicable" if no departure was found (cofounderStability is "stable" or "unclear").
+
+IMPORTANT — Entity consistency:
+- Set entityConsistencyFlag to TRUE ONLY if the search results appear to describe genuinely DIFFERENT companies or people.
+- Signals of a real name collision: conflicting industries (e.g. one result about a SaaS startup, another about a restaurant chain), completely different founder names across results, or contradictory founding dates (e.g. founded 2018 in one result, founded 1987 in another).
+- Incomplete or sparse data about ONE company is NOT a collision — set entityConsistencyFlag to FALSE in that case.
+
 Search Results:
 ${truncatedResults}
 `;
@@ -122,6 +138,25 @@ ${truncatedResults}
 export const scoreCompanyNode = async (state: typeof AgentState.State) => {
   const { extractedData } = state;
   if (!extractedData) throw new Error("No extracted data to score");
+
+  // ── Entity conflict short-circuit ──────────────────────────────────────────
+  // If Gemini flagged that search results appear to describe multiple different
+  // companies with the same name, scoring would be meaningless — we'd be mixing
+  // evidence from unrelated entities. Return a distinct verdict immediately so
+  // the frontend can show a targeted disambiguation prompt instead of scores.
+  // A retry is NOT attempted here: more searches won't resolve a name collision;
+  // only user-provided context (sector / location) can fix it.
+  if (extractedData.entityConsistencyFlag === true) {
+    const conflictScores: FounderScores = {
+      trackRecord:  { score: 0, rawEvidence: "N/A — entity conflict detected" },
+      domainFit:    { score: 0, rawEvidence: "N/A — entity conflict detected" },
+      teamVelocity: { score: 0, rawEvidence: "N/A — entity conflict detected" },
+      conviction:   { score: 0, rawEvidence: "N/A — entity conflict detected" },
+      weightedTotal: 0,
+      verdict: "Entity Conflict",
+    };
+    return { scores: conflictScores };
+  }
 
   // Weights
   const wTrackRecord = 0.30;
@@ -148,10 +183,23 @@ export const scoreCompanyNode = async (state: typeof AgentState.State) => {
   if (extractedData.teamVelocity.keyHiresFound.length >= 2) velScore = 8;
   else if (extractedData.teamVelocity.keyHiresFound.length === 0) velScore = 3;
 
-  // Conviction logic
+  // Conviction logic — timing-aware departure scoring
+  // Judgment call: "unclear" timing defaults to 3 (not 2).
+  // Reasoning: early blow-ups are usually documented online (press, LinkedIn, Reddit).
+  // If we found a departure but can't find timing, it's more likely a quiet late
+  // transition than a dramatic early falling-out. So "unclear" leans cautious
+  // but does NOT apply the same floor-rule risk as a confirmed early departure.
   let convScore = 6;
-  if (extractedData.conviction.cofounderStability === "departures_found") convScore = 2;
-  else if (extractedData.conviction.cofounderStability === "stable") convScore = 8;
+  if (extractedData.conviction.cofounderStability === "stable") {
+    convScore = 8;
+  } else if (extractedData.conviction.cofounderStability === "departures_found") {
+    const timing = extractedData.conviction.departureTiming;
+    if (timing === "early")   convScore = 2; // early instability — real red flag, keep floor risk
+    else if (timing === "late")    convScore = 5; // late transition — penalised but not disqualifying
+    else if (timing === "unclear") convScore = 3; // cautious default — departure confirmed, timing unknown
+    else                           convScore = 3; // fallback for unexpected values
+  }
+  // cofounderStability === "unclear" stays at default 6
 
   const weightedTotal = 
     (trScore * wTrackRecord) + 
@@ -186,10 +234,17 @@ export const scoreCompanyNode = async (state: typeof AgentState.State) => {
 };
 
 export const decideOutcomeNode = async (state: typeof AgentState.State) => {
-  const { companyName, scores } = state;
+  const { companyName, scores, extractedData } = state;
   const llm = getLlm();
 
-  const prompt = `You are a Venture Capital Partner writing the final investment memo for "${companyName}".
+  if (!scores || !extractedData) throw new Error("Missing data for decision");
+
+  // Short-circuit if we have an entity conflict
+  if (scores.verdict === "Entity Conflict") {
+    return { finalReasoning: "Search results appear to reference multiple different entities. Please add a sector or location to disambiguate." };
+  }
+
+  const prompt = `You are a venture capital partner writing a final decision memo for the company "${companyName}".
 Based on the extracted data and the calculated scores, write a professional, concise, and definitive reasoning narrative.
 Explain why the startup received a verdict of "${scores?.verdict}" with a score of ${scores?.weightedTotal}.
 Highlight the strongest and weakest categories based on the scoring (Track Record: ${scores?.trackRecord.score}, Domain Fit: ${scores?.domainFit.score}, Velocity: ${scores?.teamVelocity.score}, Conviction: ${scores?.conviction.score}).

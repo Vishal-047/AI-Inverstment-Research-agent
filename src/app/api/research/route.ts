@@ -6,7 +6,7 @@ export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
   try {
-    const { companyName } = await req.json();
+    const { companyName, context } = await req.json();
 
 
     if (!companyName) {
@@ -19,28 +19,42 @@ export async function POST(req: NextRequest) {
     // Only pass fields without defaults — LangGraph fills in the rest from Annotation defaults
     const initialState = {
       companyName,
+      context: context || "",
       queries: [] as string[],
     };
 
-    // recursionLimit: LangGraph's cycle detection fires by default on any graph
-    // that revisits a node. Our retry loop intentionally cycles back to planQueries
-    // up to 2 times. Setting recursionLimit high enough (25 steps covers our max
-    // 3 passes × 5 nodes = 15 steps, plus headroom) suppresses the false positive.
-    const resultState = await investmentAgentGraph.invoke(initialState, {
-      recursionLimit: 25,
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        try {
+          const lgStream = await investmentAgentGraph.stream(initialState, {
+            recursionLimit: 25,
+            streamMode: "updates",
+          });
+
+          for await (const chunk of lgStream) {
+            const [nodeName, nodeData] = Object.entries(chunk)[0];
+            
+            const payload = { node: nodeName, data: nodeData };
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+          }
+          
+          // Signal the end of the graph execution
+          controller.enqueue(encoder.encode(`data: {"done": true}\n\n`));
+          controller.close();
+        } catch (err: any) {
+          console.error("Streaming error:", err);
+          controller.enqueue(encoder.encode(`data: {"error": ${JSON.stringify(err.message || "Unknown error")}}\n\n`));
+          controller.close();
+        }
+      }
     });
 
-    return NextResponse.json({
-      success: true,
-      data: {
-        companyName: resultState.companyName,
-        queriesRun: resultState.queries,
-        scores: resultState.scores,
-        finalReasoning: resultState.finalReasoning,
-        extractedData: resultState.extractedData,
-        // Optional: Include searchResults if you want to show raw text on frontend, 
-        // but it might be large. We'll leave it out to save bandwidth, 
-        // since we have rawEvidence in the scores.
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
       },
     });
   } catch (error: any) {

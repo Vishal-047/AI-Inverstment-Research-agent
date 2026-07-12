@@ -13,5 +13,5 @@ export type FounderScores = {
   teamVelocity: ScoredCategory;
   conviction: ScoredCategory;
   weightedTotal: number;
-  verdict: "Invest" | "Pass with note" | "Pass" | "Inconclusive";
+  verdict: "Invest" | "Pass with note" | "Pass" | "Inconclusive" | "Entity Conflict";
 };
